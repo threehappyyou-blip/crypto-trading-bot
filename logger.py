@@ -13,15 +13,29 @@ from typing import Dict, List, Optional
 
 import config
 
+# trades.csv에는 두 가지 형태의 행이 섞여서 쌓입니다 — 매수(buy: stop_loss_price,
+# take_profit_price 포함)와 매도(sell: realized_pnl_krw, r_multiple 등 포함).
+# 두 형태의 키가 서로 다르기 때문에, 매번 그 행의 키만으로 헤더를 새로 잡으면
+# (예전 방식) 첫 행 이후로는 헤더와 실제 컬럼이 어긋나는 CSV가 만들어집니다.
+# 그래서 trades.csv만은 모든 가능한 컬럼을 포함한 고정 헤더를 쓰고, 없는 값은
+# 빈 칸으로 채웁니다.
+TRADE_CSV_FIELDNAMES = [
+    "timestamp", "market", "side", "price", "quantity", "amount_krw", "fee_krw",
+    "stop_loss_price", "take_profit_price",
+    "realized_pnl_krw", "realized_pnl_pct", "risk_amount_krw", "r_multiple",
+    "reason",
+]
 
-def _append_csv(path: str, row: Dict) -> None:
+
+def _append_csv(path: str, row: Dict, fieldnames: Optional[List[str]] = None) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     file_exists = os.path.exists(path)
+    fieldnames = fieldnames or list(row.keys())
     with open(path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         if not file_exists:
             writer.writeheader()
-        writer.writerow(row)
+        writer.writerow({k: row.get(k, "") for k in fieldnames})
 
 
 def log_decision(market: str, trigger_type: str, decision, timestamp,
@@ -43,9 +57,10 @@ def log_decision(market: str, trigger_type: str, decision, timestamp,
 
 
 def log_trades(trades_log: List[Dict], path: Optional[str] = None) -> None:
-    """이번 실행에서 발생한 체결(들)을 trades.csv(또는 지정한 path)에 기록합니다."""
+    """이번 실행에서 발생한 체결(들)을 trades.csv(또는 지정한 path)에 기록합니다.
+    buy/sell 행의 컬럼이 서로 달라서 TRADE_CSV_FIELDNAMES 고정 헤더를 씁니다."""
     for trade in trades_log:
-        _append_csv(path or config.TRADES_LOG_FILE, trade)
+        _append_csv(path or config.TRADES_LOG_FILE, trade, fieldnames=TRADE_CSV_FIELDNAMES)
 
 
 def log_equity_snapshot(timestamp, equity: float, cash: float, num_positions: int,

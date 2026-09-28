@@ -9,8 +9,10 @@
 실행: python tests/test_logic.py
 (정상이면 마지막에 "모든 테스트 통과" 출력)
 """
+import csv
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,6 +21,7 @@ import pandas as pd
 
 import config
 import indicators
+import logger
 from trigger import detect_trigger
 from portfolio_sim import Portfolio
 from claude_judge import _extract_json, _validate_decision
@@ -231,6 +234,31 @@ def test_take_profit():
           f"목표 손익비=1:{config.TAKE_PROFIT_RR_MULTIPLE})")
 
 
+def test_trades_csv_has_consistent_columns():
+    """buy 행과 sell 행은 서로 다른 키를 가지므로(예: stop_loss_price vs
+    r_multiple), trades.csv에 매수 1건 + 매도 1건을 순서대로 기록한 뒤
+    모든 데이터 행의 컬럼 수가 헤더와 똑같이 맞는지(=CSV가 깨지지 않는지) 검증."""
+    portfolio = Portfolio(cash=config.INITIAL_CAPITAL_KRW, initial_capital=config.INITIAL_CAPITAL_KRW)
+    trades_log = []
+    portfolio.open_position("KRW-BTC", 50_000_000.0, 1_000_000.0, "t0", trades_log)
+    portfolio.close_position("KRW-BTC", 52_000_000.0, "t1", reason="test", trades_log=trades_log)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "trades.csv")
+        logger.log_trades(trades_log, path=path)
+
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+
+        header = rows[0]
+        assert header == logger.TRADE_CSV_FIELDNAMES, "trades.csv 헤더가 고정 컬럼 목록과 달라졌습니다"
+        for data_row in rows[1:]:
+            assert len(data_row) == len(header), \
+                f"데이터 행의 컬럼 수({len(data_row)})가 헤더({len(header)})와 어긋났습니다: {data_row}"
+
+    print("✅ test_trades_csv_has_consistent_columns 통과")
+
+
 def test_circuit_breaker():
     portfolio = Portfolio(cash=config.INITIAL_CAPITAL_KRW, initial_capital=config.INITIAL_CAPITAL_KRW)
     trades_log = []
@@ -285,6 +313,7 @@ if __name__ == "__main__":
     test_portfolio_buy_and_stop_loss()
     test_r_multiple_on_close()
     test_take_profit()
+    test_trades_csv_has_consistent_columns()
     test_circuit_breaker()
     test_claude_json_parsing()
     print("\n모든 테스트 통과 🎉")
