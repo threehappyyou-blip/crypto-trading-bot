@@ -77,6 +77,7 @@ def run_backtest(markets: list[str], lookback_days: int) -> None:
 
         # 안전장치는 매 캔들마다 항상 우선 체크 (트리거 여부와 무관)
         portfolio.check_stop_losses(current_prices, timestamp, trades_log)
+        portfolio.check_take_profits(current_prices, timestamp, trades_log)
         if not portfolio.halted:
             portfolio.check_circuit_breaker(current_prices, timestamp, trades_log)
 

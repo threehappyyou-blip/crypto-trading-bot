@@ -46,6 +46,7 @@ def run_once() -> None:
 
     # 2. 안전장치 먼저 적용 (클로드 판단보다 항상 우선)
     portfolio.check_stop_losses(current_prices, latest_timestamp, trades_log)
+    portfolio.check_take_profits(current_prices, latest_timestamp, trades_log)
     just_halted = portfolio.check_circuit_breaker(current_prices, latest_timestamp, trades_log)
     if just_halted:
         print("⚠️  서킷브레이커 발동: 누적 손실 한도 초과로 모든 포지션 청산, 신규 매매 중단.")

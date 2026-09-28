@@ -31,6 +31,7 @@ class Position:
     entry_price: float
     stop_loss_price: float
     entry_timestamp: str
+    take_profit_price: Optional[float] = None  # config.ENABLE_TAKE_PROFIT=False면 None (익절 미사용)
 
 
 @dataclass
@@ -123,6 +124,13 @@ class Portfolio:
         atr_stop = fill_price - (atr * config.ATR_STOP_MULTIPLIER)
         stop_loss_price = max(pct_stop, atr_stop)  # 더 높은(=덜 여유로운, 더 타이트한) 쪽
 
+        # 익절가: 진입 시점의 리스크(진입가-손절가)를 1로 놓고 그 RR배만큼 위에 설정
+        take_profit_price = None
+        if config.ENABLE_TAKE_PROFIT:
+            risk_per_unit = fill_price - stop_loss_price
+            if risk_per_unit > 0:
+                take_profit_price = fill_price + (risk_per_unit * config.TAKE_PROFIT_RR_MULTIPLE)
+
         self.cash -= allocation
         position = Position(
             market=market,
@@ -130,6 +138,7 @@ class Portfolio:
             entry_price=fill_price,
             stop_loss_price=stop_loss_price,
             entry_timestamp=str(timestamp),
+            take_profit_price=take_profit_price,
         )
         self.positions[market] = position
 
@@ -142,6 +151,7 @@ class Portfolio:
             "amount_krw": allocation,
             "fee_krw": fee,
             "stop_loss_price": stop_loss_price,
+            "take_profit_price": take_profit_price,
             "reason": "claude_signal",
         })
         return position
@@ -196,6 +206,23 @@ class Portfolio:
                 continue
             if price <= self.positions[market].stop_loss_price:
                 self.close_position(market, price, timestamp, reason="hard_stop_loss",
+                                      trades_log=trades_log)
+
+    def check_take_profits(self, current_prices: Dict[str, float], timestamp,
+                             trades_log: list) -> None:
+        """보유 포지션 중 익절가(take_profit_price) 이상으로 오른 종목을 강제 청산합니다.
+        config.ENABLE_TAKE_PROFIT=False이거나 포지션에 익절가가 없으면(None) 아무 일도
+        하지 않습니다 — 손익비 옵션을 끈 상태에서는 기존처럼 클로드 sell 판단에만
+        의존합니다. check_stop_losses와 마찬가지로 클로드 판단보다 항상 먼저 체크됩니다."""
+        for market in list(self.positions.keys()):
+            take_profit_price = self.positions[market].take_profit_price
+            if take_profit_price is None:
+                continue
+            price = current_prices.get(market)
+            if price is None:
+                continue
+            if price >= take_profit_price:
+                self.close_position(market, price, timestamp, reason="take_profit",
                                       trades_log=trades_log)
 
     def check_circuit_breaker(self, current_prices: Dict[str, float], timestamp,

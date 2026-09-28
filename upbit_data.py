@@ -49,7 +49,12 @@ def fetch_candles(market: str, unit_minutes: int, count: int) -> pd.DataFrame:
         raise RuntimeError(f"{market}: 업비트에서 빈 응답을 받았습니다.")
 
     df = pd.DataFrame(raw)
+    # 업비트 원본 응답에는 이미 "timestamp"(에폭ms) 필드가 있어서, candle_date_time_kst를
+    # 그대로 "timestamp"로 바꾸면 동명 컬럼이 2개가 되어 df["timestamp"]가 DataFrame이
+    # 되어버립니다(→ pd.to_datetime에서 "cannot assemble with duplicate keys" 에러).
+    # 원본 timestamp 필드를 먼저 다른 이름으로 치워서 충돌을 막습니다.
     df = df.rename(columns={
+        "timestamp": "_raw_epoch_ms",
         "candle_date_time_kst": "timestamp",
         "opening_price": "open",
         "high_price": "high",
@@ -91,7 +96,9 @@ def fetch_candles_history(market: str, unit_minutes: int, lookback_days: int,
         if not raw:
             break  # 더 이상 과거 데이터가 없음
 
+        # fetch_candles()와 동일한 이유로 원본 "timestamp"(에폭ms) 필드를 먼저 치움
         chunk = pd.DataFrame(raw).rename(columns={
+            "timestamp": "_raw_epoch_ms",
             "candle_date_time_kst": "timestamp",
             "opening_price": "open",
             "high_price": "high",

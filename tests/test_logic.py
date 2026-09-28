@@ -101,6 +101,40 @@ def test_trigger_detection():
           f"{[t.trigger_type for t in triggers]})")
 
 
+def test_standalone_volume_trigger_toggle():
+    df = make_synthetic_candles()
+    out = indicators.compute_all(df)
+
+    # 기본값(False)일 때는 EMA/RSI 신호가 없는 캔들에서 트리거가 나오면 안 됨
+    assert config.ENABLE_STANDALONE_VOLUME_TRIGGER is False, "기본값은 False여야 합니다"
+
+    no_trigger_events = 0
+    volume_only_candidates = 0
+    for i in range(config.EMA_SLOW + 2, len(out) + 1):
+        window = out.iloc[:i].reset_index(drop=True)
+        event = detect_trigger("KRW-TEST", window)
+        if event is None and bool(window.iloc[-1]["volume_spike"]):
+            volume_only_candidates += 1
+
+    assert volume_only_candidates > 0, "테스트 데이터에 거래량만 급증한 캔들이 있어야 의미있는 테스트입니다"
+
+    # 옵션을 켜면 그 캔들들에서 volume_spike_standalone 트리거가 나와야 함
+    config.ENABLE_STANDALONE_VOLUME_TRIGGER = True
+    try:
+        standalone_triggers = 0
+        for i in range(config.EMA_SLOW + 2, len(out) + 1):
+            window = out.iloc[:i].reset_index(drop=True)
+            event = detect_trigger("KRW-TEST", window)
+            if event is not None and event.trigger_type == "volume_spike_standalone":
+                standalone_triggers += 1
+        assert standalone_triggers == volume_only_candidates, \
+            "옵션을 켜면 거래량만 급증한 모든 캔들에서 volume_spike_standalone이 나와야 합니다"
+    finally:
+        config.ENABLE_STANDALONE_VOLUME_TRIGGER = False  # 다른 테스트에 영향 주지 않도록 원복
+
+    print(f"✅ test_standalone_volume_trigger_toggle 통과 (옵션 끄면 0건, 켜면 {standalone_triggers}건)")
+
+
 def test_portfolio_buy_and_stop_loss():
     portfolio = Portfolio(cash=config.INITIAL_CAPITAL_KRW, initial_capital=config.INITIAL_CAPITAL_KRW)
     trades_log = []
@@ -147,6 +181,54 @@ def test_r_multiple_on_close():
     assert 1.5 < sell_trade["r_multiple"] < 2.2, f"예상 범위를 벗어난 R-멀티플: {sell_trade['r_multiple']}"
 
     print(f"✅ test_r_multiple_on_close 통과 (R-멀티플={sell_trade['r_multiple']})")
+
+
+def test_take_profit():
+    assert config.ENABLE_TAKE_PROFIT is True, "기본값은 True여야 합니다 (바로 검증 가능하도록)"
+
+    portfolio = Portfolio(cash=config.INITIAL_CAPITAL_KRW, initial_capital=config.INITIAL_CAPITAL_KRW)
+    trades_log = []
+
+    entry_price = 50_000_000.0
+    atr = 1_000_000.0
+    portfolio.open_position("KRW-BTC", entry_price, atr, "t0", trades_log)
+    position = portfolio.positions["KRW-BTC"]
+
+    assert position.take_profit_price is not None, "옵션이 켜져 있으면 익절가가 설정되어야 합니다"
+    risk_per_unit = position.entry_price - position.stop_loss_price
+    expected_tp = position.entry_price + risk_per_unit * config.TAKE_PROFIT_RR_MULTIPLE
+    assert abs(position.take_profit_price - expected_tp) < 1, "익절가 계산이 RR 배수와 어긋납니다"
+
+    # 익절가 이상으로 가격이 오르면 check_take_profits가 자동 청산해야 함
+    # (청산가는 "도달한 실제 가격"이므로, R-멀티플을 목표 배수와 비교하려면 딱
+    # 익절가 근처에서 체결되도록 아주 살짝만 넘겨야 함 — 많이 넘기면 그만큼 R이 더 커짐)
+    surge_price = position.take_profit_price * 1.0005
+    portfolio.check_take_profits({"KRW-BTC": surge_price}, "t1", trades_log)
+
+    assert "KRW-BTC" not in portfolio.positions, "익절가 상회 시 포지션이 청산되어야 합니다"
+    tp_trade = [t for t in trades_log if t["reason"] == "take_profit"][0]
+    assert tp_trade["r_multiple"] is not None
+    # 목표 RR 배수 근처여야 함 (수수료/슬리피지로 정확히 일치하진 않음)
+    assert config.TAKE_PROFIT_RR_MULTIPLE - 0.5 < tp_trade["r_multiple"] < config.TAKE_PROFIT_RR_MULTIPLE + 0.5, \
+        f"예상 범위를 벗어난 R-멀티플: {tp_trade['r_multiple']}"
+
+    # 옵션을 끄면 익절가가 아예 설정되지 않아야 함 (기존처럼 클로드 sell 판단에만 의존)
+    config.ENABLE_TAKE_PROFIT = False
+    try:
+        portfolio2 = Portfolio(cash=config.INITIAL_CAPITAL_KRW, initial_capital=config.INITIAL_CAPITAL_KRW)
+        trades_log2 = []
+        portfolio2.open_position("KRW-BTC", entry_price, atr, "t0", trades_log2)
+        position2 = portfolio2.positions["KRW-BTC"]
+        assert position2.take_profit_price is None, "옵션을 끄면 익절가가 없어야 합니다"
+
+        # 가격이 아무리 올라도 check_take_profits는 아무 것도 하면 안 됨
+        portfolio2.check_take_profits({"KRW-BTC": entry_price * 2}, "t1", trades_log2)
+        assert "KRW-BTC" in portfolio2.positions, "옵션이 꺼져 있으면 자동 익절되면 안 됩니다"
+    finally:
+        config.ENABLE_TAKE_PROFIT = True  # 다른 테스트에 영향 주지 않도록 원복
+
+    print(f"✅ test_take_profit 통과 (R-멀티플={tp_trade['r_multiple']}, "
+          f"목표 손익비=1:{config.TAKE_PROFIT_RR_MULTIPLE})")
 
 
 def test_circuit_breaker():
@@ -199,8 +281,10 @@ def test_claude_json_parsing():
 if __name__ == "__main__":
     test_indicators()
     test_trigger_detection()
+    test_standalone_volume_trigger_toggle()
     test_portfolio_buy_and_stop_loss()
     test_r_multiple_on_close()
+    test_take_profit()
     test_circuit_breaker()
     test_claude_json_parsing()
     print("\n모든 테스트 통과 🎉")
