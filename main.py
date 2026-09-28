@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import config
+import content_digest
 import indicators
 import logger
 import upbit_data
@@ -88,6 +89,10 @@ def run_once() -> None:
         portfolio.halted,
     )
     portfolio.save()
+
+    # 6. 청산 매매가 새로운 마일스톤(기본 5건)을 넘었으면 콘텐츠 초안 자동 생성
+    #    (실패해도 여기서 예외를 던지지 않으므로 위의 매매 실행에는 영향 없음)
+    content_digest.maybe_generate_digest()
 
     print(f"[{datetime.now(timezone.utc).isoformat()}] 실행 종료 — "
           f"총자산: {equity:,.0f} KRW (초기자본 대비 {equity / portfolio.initial_capital - 1:+.2%}), "

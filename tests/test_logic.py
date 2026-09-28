@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 import config
+import content_digest
 import indicators
 import logger
 from trigger import detect_trigger
@@ -259,6 +260,46 @@ def test_trades_csv_has_consistent_columns():
     print("✅ test_trades_csv_has_consistent_columns 통과")
 
 
+def test_content_digest_milestone():
+    # 5건 마일스톤: 처음 5건째, 10건째... 넘을 때만 True
+    assert content_digest.should_generate(4, 0) is False, "5건 미만이면 아직 생성하면 안 됩니다"
+    assert content_digest.should_generate(5, 0) is True, "정확히 5건째는 생성해야 합니다"
+    assert content_digest.should_generate(9, 5) is False, "5건 만들고 나서 9건까지는 아직 다음 마일스톤 전입니다"
+    assert content_digest.should_generate(10, 5) is True, "10건째는 다음 마일스톤입니다"
+    # 한 번에 여러 마일스톤을 건너뛰어도(3건 -> 12건) 이번엔 1번만 생성 신호
+    assert content_digest.should_generate(12, 3) is True
+    # 청산 건수가 마지막 생성 시점보다 줄어들 수는 없지만, 방어적으로 False가 나와야 함
+    assert content_digest.should_generate(3, 5) is False
+
+    print("✅ test_content_digest_milestone 통과")
+
+
+def test_content_digest_build_data():
+    trades = [
+        {"timestamp": "t1", "market": "KRW-BTC", "side": "buy"},
+        {"timestamp": "t1", "market": "KRW-BTC", "side": "sell",
+         "realized_pnl_krw": "15000", "realized_pnl_pct": "0.03", "reason": "take_profit",
+         "r_multiple": "2.0"},
+        {"timestamp": "t2", "market": "KRW-ETH", "side": "buy"},
+        {"timestamp": "t2", "market": "KRW-ETH", "side": "sell",
+         "realized_pnl_krw": "-5000", "realized_pnl_pct": "-0.01", "reason": "hard_stop_loss",
+         "r_multiple": "-1.0"},
+    ]
+    decisions = [
+        {"timestamp": "t1", "market": "KRW-BTC", "reasoning": "골든크로스 + 거래량 급증"},
+        {"timestamp": "t2", "market": "KRW-ETH", "reasoning": "RSI 과매도 반등"},
+    ]
+
+    data = content_digest._build_digest_data(trades, decisions, since_index=0)
+    assert data["count"] == 2, "청산(sell)된 매매만 2건 집계되어야 합니다"
+    assert data["win_rate"] == 50.0, f"승률 계산이 틀렸습니다: {data['win_rate']}"
+    assert abs(data["total_pnl_krw"] - 10000) < 1, "총 손익 합산이 틀렸습니다"
+    assert data["trades"][0]["reasoning"] == "골든크로스 + 거래량 급증", \
+        "timestamp+market으로 판단 근거를 정확히 매칭해야 합니다"
+
+    print("✅ test_content_digest_build_data 통과")
+
+
 def test_circuit_breaker():
     portfolio = Portfolio(cash=config.INITIAL_CAPITAL_KRW, initial_capital=config.INITIAL_CAPITAL_KRW)
     trades_log = []
@@ -314,6 +355,8 @@ if __name__ == "__main__":
     test_r_multiple_on_close()
     test_take_profit()
     test_trades_csv_has_consistent_columns()
+    test_content_digest_milestone()
+    test_content_digest_build_data()
     test_circuit_breaker()
     test_claude_json_parsing()
     print("\n모든 테스트 통과 🎉")
